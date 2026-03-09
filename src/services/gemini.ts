@@ -58,6 +58,7 @@ async function extractModules(
     1. 提取出的模块应该是逻辑独立的，方便后续针对每个模块生成详细的测试用例。
     2. 模块数量不宜过多或过少（通常 5-10 个为佳，取决于文档复杂度）。
     3. 只返回模块名称列表。
+    4. **全局规则：所有输出内容必须使用中文。**
 
     **需求文档内容：**
     ${requirementText.substring(0, 30000)} ... (仅截取部分用于提取目录)
@@ -114,6 +115,7 @@ export async function generateTestCases(
         **关键目标：**
         1. **深度挖掘**：深入挖掘该模块中的每一个功能点、每一个输入框、每一个按钮、每一个接口参数。
         2. **多维度覆盖**：UI交互、表单验证、异常场景、边界值、权限校验等。
+        3. **全局规则：所有生成的测试用例内容（标题、步骤、预期结果等）必须使用中文。**
 
         **用例结构要求：**
         - 模块名称：必须使用 "${moduleName}"。
@@ -197,7 +199,8 @@ export async function generateTestCases(
     **关键目标：**
     1. **穷尽性测试**：不要只生成几个示例。你需要深入挖掘文档中的每一个功能点、每一个输入框、每一个按钮、每一个接口参数。
     2. **数量要求**：请根据文档复杂度生成尽可能多的用例（目标 30-50 条以上，如果文档复杂则更多）。必须确保覆盖所有模块。
-    3. **多维度覆盖：**
+    3. **全局规则：所有生成的测试用例内容必须使用中文。**
+    4. **多维度覆盖：**
        - **前端**：UI交互、表单验证（各种非法输入）、页面跳转、E2E流程、响应式适配。
        - **后端**：所有 API 的请求/响应、必填项、类型校验、权限校验、逻辑校验、异常处理。
        - **场景**：正向流程、负向流程、边界值（极值、空值、超长值）、异常场景（断网、超时、并发、非法操作）。
@@ -380,6 +383,7 @@ export async function generateXMindContent(
     4 请保证每个功能生成 8-15 个测试点
     5 步骤与预期尽量简洁（非常重要）
     6 输出内容可以直接复制到 XMind
+    7 **全局规则：所有输出内容必须使用中文。**
 
     **需求文档内容如下：**
     ${requirementText}
@@ -460,6 +464,7 @@ export async function analyzeRequirements(
     2. 修正后的完整需求文档：**这是最关键的部分**。请基于原始需求文档，将评审中发现的问题进行修正，并补充缺失的细节。
        **注意：必须保留原始文档中的所有现有章节、功能描述和细节，严禁进行任何形式的删减或概括。** 
        你需要在保持原貌的基础上进行“增量式”的完善和修正，确保输出的是一份可以直接替代原文档的、更严谨、更完整的版本。
+    3. **全局规则：所有输出内容（评审报告和修正后的文档）必须使用中文。**
 
     请以 JSON 格式返回，包含以下字段：
     - report: 评审报告的 Markdown 内容
@@ -515,5 +520,141 @@ export async function analyzeRequirements(
       throw new Error("API 请求配额已耗尽或请求过于频繁。请稍后再试，或在设置中配置您自己的 API Key 以获得更高配额。");
     }
     throw new Error(`需求分析失败: ${errorMsg || "未知错误"}`);
+  }
+}
+
+export async function generateIncrementalTestCases(
+  oldRequirementText: string,
+  newRequirementText: string,
+  existingTestCases: TestCase[],
+  images?: ImageContent[],
+  customApiKey?: string,
+  modelName: string = "gemini-3-flash-preview",
+  onProgress?: (message: string) => void,
+  style: TestStyle = 'standard'
+): Promise<{ newCases: TestCase[]; updatedCases: TestCase[]; deletedIds: string[] }> {
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+  const styleInstruction = TEST_STYLES[style].instruction;
+
+  onProgress?.("正在对比需求变更并生成增量测试用例...");
+
+  const prompt = `
+    你是一名资深软件测试专家。我将提供两个版本的需求文档（旧版 V1.0 和新版 V1.1），以及现有的测试用例列表。
+    请分析需求变更，并输出“测试用例补丁”。
+
+    **输入数据：**
+    1. **旧版需求 (V1.0)**: 
+    ${oldRequirementText.substring(0, 10000)}
+    
+    2. **新版需求 (V1.1)**:
+    ${newRequirementText.substring(0, 10000)}
+    
+    3. **现有测试用例**:
+    ${JSON.stringify(existingTestCases.map(tc => ({ id: tc.id, title: tc.title, module: tc.module })))}
+
+    **任务要求：**
+    1. **识别新增功能**：针对新版中新增的功能点，生成全新的测试用例。
+    2. **识别修改功能**：针对逻辑发生变化的功能，输出更新后的测试用例（保持原 ID）。
+    3. **识别删除功能**：识别由于需求删除而失效的用例 ID。
+    4. **全局规则：所有输出内容必须使用中文。**
+
+    **测试风格要求：**
+    ${styleInstruction}
+
+    **输出格式要求：**
+    请返回一个 JSON 对象，包含以下三个字段：
+    - newCases: 新增的测试用例数组（遵循标准 TestCase 结构）。
+    - updatedCases: 需要更新的现有测试用例数组（必须包含原 ID）。
+    - deletedIds: 需要删除的用例 ID 字符串数组。
+
+    TestCase 结构：
+    {
+      "module": "模块名",
+      "id": "用例编号",
+      "title": "标题",
+      "type": "类型",
+      "preconditions": "前置条件",
+      "steps": ["步骤1", "步骤2"],
+      "inputData": "输入数据",
+      "expectedResult": "预期结果",
+      "priority": "High/Medium/Low",
+      "remarks": "备注"
+    }
+  `;
+
+  const parts: any[] = [{ text: prompt }];
+  if (images && images.length > 0) {
+    images.forEach(img => {
+      parts.push({
+        inlineData: {
+          mimeType: img.mimeType,
+          data: img.data.split(',')[1] || img.data
+        }
+      });
+    });
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: { parts },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            newCases: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  module: { type: Type.STRING },
+                  id: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  preconditions: { type: Type.STRING },
+                  steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  inputData: { type: Type.STRING },
+                  expectedResult: { type: Type.STRING },
+                  priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                  remarks: { type: Type.STRING }
+                },
+                required: ["module", "id", "title", "type", "preconditions", "steps", "inputData", "expectedResult", "priority", "remarks"]
+              }
+            },
+            updatedCases: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  module: { type: Type.STRING },
+                  id: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  preconditions: { type: Type.STRING },
+                  steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  inputData: { type: Type.STRING },
+                  expectedResult: { type: Type.STRING },
+                  priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                  remarks: { type: Type.STRING }
+                },
+                required: ["module", "id", "title", "type", "preconditions", "steps", "inputData", "expectedResult", "priority", "remarks"]
+              }
+            },
+            deletedIds: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
+          },
+          required: ["newCases", "updatedCases", "deletedIds"]
+        }
+      }
+    });
+
+    return JSON.parse(response.text || '{"newCases":[],"updatedCases":[],"deletedIds":[]}');
+  } catch (error: any) {
+    console.error("Gemini API Error (Incremental):", error);
+    throw new Error(`增量更新失败: ${error.message || "未知错误"}`);
   }
 }

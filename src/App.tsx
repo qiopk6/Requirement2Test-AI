@@ -25,6 +25,7 @@ import {
   generateTestCases, 
   generateXMindContent, 
   analyzeRequirements,
+  generateIncrementalTestCases,
   TEST_STYLES,
   type TestCase, 
   type ImageContent,
@@ -73,6 +74,9 @@ export default function App() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [hasPlatformKey, setHasPlatformKey] = useState(false);
+  const [isIncremental, setIsIncremental] = useState(false);
+  const [oldFile, setOldFile] = useState<File | null>(null);
+  const [oldParsedText, setOldParsedText] = useState<string>('');
 
   React.useEffect(() => {
     setHistory(historyService.getAll());
@@ -110,7 +114,7 @@ export default function App() {
     handleDesignFiles(droppedFiles);
   }, [designFiles]);
 
-  const handleFile = (selectedFile: File) => {
+  const handleFile = (selectedFile: File, isOld: boolean = false) => {
     const validTypes = ['.pdf', '.docx', '.md', '.txt'];
     const extension = selectedFile.name.substring(selectedFile.name.lastIndexOf('.')).toLowerCase();
     
@@ -124,13 +128,18 @@ export default function App() {
       return;
     }
 
-    setFile(selectedFile);
-    setSourceType('original');
-    setParsedText('');
-    setTestCases([]);
-    setXmindContent('');
-    setAnalysisReport('');
-    setRevisedDocument('');
+    if (isOld) {
+      setOldFile(selectedFile);
+      setOldParsedText('');
+    } else {
+      setFile(selectedFile);
+      setSourceType('original');
+      setParsedText('');
+      setTestCases([]);
+      setXmindContent('');
+      setAnalysisReport('');
+      setRevisedDocument('');
+    }
     setError(null);
   };
 
@@ -209,6 +218,14 @@ export default function App() {
       }
       
       if (!text) return;
+
+      let oldText = oldParsedText;
+      if (isIncremental && !oldText && oldFile) {
+        setIsParsing(true);
+        oldText = await parseFile(oldFile);
+        setOldParsedText(oldText);
+        setIsParsing(false);
+      }
       
       setIsGenerating(true);
       setGenerationProgress('正在准备生成...');
@@ -222,7 +239,32 @@ export default function App() {
       }
 
       if (mode === 'matrix') {
-        const cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle);
+        let cases: TestCase[] = [];
+        if (isIncremental && oldText) {
+          const result = await generateIncrementalTestCases(
+            oldText, 
+            text, 
+            testCases, 
+            images, 
+            customApiKey, 
+            selectedModel, 
+            (msg) => setGenerationProgress(msg), 
+            testStyle
+          );
+          
+          // Merge results
+          const updatedMap = new Map(result.updatedCases.map(tc => [tc.id, tc]));
+          const deletedSet = new Set(result.deletedIds);
+          
+          const mergedCases = testCases
+            .filter(tc => !deletedSet.has(tc.id))
+            .map(tc => updatedMap.get(tc.id) || tc);
+          
+          cases = [...mergedCases, ...result.newCases];
+        } else {
+          cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle);
+        }
+
         setTestCases(cases);
         setXmindContent('');
         setAnalysisReport('');
@@ -533,9 +575,98 @@ export default function App() {
                 </AnimatePresence>
               </div>
 
+              <div className="mb-6 pb-6 border-b border-slate-100">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <div className={cn(
+                      "p-1.5 rounded-lg",
+                      isIncremental ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-500"
+                    )}>
+                      <History className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900">增量更新模式</h3>
+                      <p className="text-[10px] text-slate-500">对比 V1.0 与 V1.1，仅生成变更用例</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setIsIncremental(!isIncremental)}
+                    className={cn(
+                      "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
+                      isIncremental ? "bg-indigo-600" : "bg-slate-200"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                        isIncremental ? "translate-x-6" : "translate-x-1"
+                      )}
+                    />
+                  </button>
+                </div>
+
+                <AnimatePresence>
+                  {isIncremental && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 mb-4">
+                        <p className="text-xs text-amber-700 leading-relaxed">
+                          <strong>提示：</strong> 请先上传<b>旧版本 (V1.0)</b> 或确保当前已有测试用例，然后再上传<b>新版本 (V1.1)</b>。AI 将自动分析差异。
+                        </p>
+                      </div>
+                      
+                      <div 
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const f = e.dataTransfer.files[0];
+                          if (f) handleFile(f, true);
+                        }}
+                        className={cn(
+                          "border-2 border-dashed rounded-xl p-4 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-2",
+                          oldFile ? "border-amber-200 bg-amber-50/30" : "border-slate-200 hover:border-amber-400 hover:bg-slate-50"
+                        )}
+                        onClick={() => document.getElementById('oldFileInput')?.click()}
+                      >
+                        <input 
+                          id="oldFileInput"
+                          type="file" 
+                          className="hidden" 
+                          accept=".pdf,.docx,.md,.txt"
+                          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0], true)}
+                        />
+                        {oldFile ? (
+                          <div className="flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-amber-600" />
+                            <span className="text-xs font-medium text-slate-700 truncate max-w-[150px]">{oldFile.name}</span>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setOldFile(null); setOldParsedText(''); }}
+                              className="p-1 hover:bg-amber-100 rounded-full text-slate-400 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
+                              <FileUp className="w-4 h-4 text-slate-400" />
+                            </div>
+                            <p className="text-[10px] text-slate-500">点击或拖拽上传<b>旧版 PRD</b></p>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <FileUp className="w-5 h-5 text-indigo-600" />
-                上传需求文档
+                {isIncremental ? '上传新版需求 (V1.1)' : '上传需求文档'}
               </h2>
               
               <div 
