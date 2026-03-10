@@ -34,6 +34,7 @@ import {
 import { historyService, type HistoryRecord } from './services/history';
 import { exportToExcel, exportToXMind } from './utils/exportUtils';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
 import { Shield, Zap, Target, Activity, Plus, FolderOpen, Settings, List } from 'lucide-react';
 import { projectService, type Project } from './services/projectService';
@@ -65,8 +66,8 @@ export default function App() {
   const [analysisReport, setAnalysisReport] = useState<string>('');
   const [revisedDocument, setRevisedDocument] = useState<string>('');
   const [analysisTab, setAnalysisTab] = useState<'report' | 'revised'>('report');
-  const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind' | 'analysis' | 'outline'>('matrix');
-  const [sourceType, setSourceType] = useState<'original' | 'revised' | null>(null);
+  const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind' | 'analysis' | 'outline'>('outline');
+  const [sourceType, setSourceType] = useState<'original' | 'revised' | 'outline' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('全部');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -77,7 +78,6 @@ export default function App() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [hasPlatformKey, setHasPlatformKey] = useState(false);
-  const [isIncremental, setIsIncremental] = useState(false);
   const [oldFile, setOldFile] = useState<File | null>(null);
   const [oldParsedText, setOldParsedText] = useState<string>('');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -257,7 +257,13 @@ export default function App() {
     let textToUse = forceSource;
     
     if (!textToUse) {
-      textToUse = sourceType === 'revised' ? revisedDocument : parsedText;
+      if (sourceType === 'revised') {
+        textToUse = revisedDocument;
+      } else if (sourceType === 'outline') {
+        textToUse = currentProject?.outline || '';
+      } else {
+        textToUse = parsedText;
+      }
     }
 
     if (!file && !forceSource && !textToUse) return;
@@ -276,7 +282,7 @@ export default function App() {
 
       // Update project outline if a project is selected
       let updatedOutline = currentProject?.outline || '';
-      if (selectedProjectId && text && !forceSource) {
+      if (selectedProjectId && text && !forceSource && mode === 'outline') {
         setGenerationProgress('正在更新项目需求大纲...');
         updatedOutline = await updateProjectOutline(updatedOutline, text, customApiKey, selectedModel);
         projectService.save({
@@ -293,13 +299,7 @@ export default function App() {
         return;
       }
 
-      let oldText = oldParsedText;
-      if (isIncremental && !oldText && oldFile) {
-        setIsParsing(true);
-        oldText = await parseFile(oldFile);
-        setOldParsedText(oldText);
-        setIsParsing(false);
-      }
+      let oldText = '';
       
       setIsGenerating(true);
       setGenerationProgress('正在准备生成...');
@@ -314,31 +314,7 @@ export default function App() {
 
       if (mode === 'matrix') {
         let cases: TestCase[] = [];
-        if (isIncremental && oldText) {
-          const result = await generateIncrementalTestCases(
-            oldText, 
-            text, 
-            testCases, 
-            images, 
-            customApiKey, 
-            selectedModel, 
-            (msg) => setGenerationProgress(msg), 
-            testStyle,
-            updatedOutline
-          );
-          
-          // Merge results
-          const updatedMap = new Map(result.updatedCases.map(tc => [tc.id, tc]));
-          const deletedSet = new Set(result.deletedIds);
-          
-          const mergedCases = testCases
-            .filter(tc => !deletedSet.has(tc.id))
-            .map(tc => updatedMap.get(tc.id) || tc);
-          
-          cases = [...mergedCases, ...result.newCases];
-        } else {
-          cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle, updatedOutline);
-        }
+        cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle, updatedOutline);
 
         setTestCases(cases);
         setXmindContent('');
@@ -528,7 +504,7 @@ export default function App() {
               <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
                 {currentProject.outline ? (
                   <div className="prose prose-slate prose-sm max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900">
-                    <Markdown>{currentProject.outline}</Markdown>
+                    <Markdown remarkPlugins={[remarkGfm]}>{currentProject.outline}</Markdown>
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-center py-20">
@@ -546,6 +522,17 @@ export default function App() {
                 <p className="text-[10px] text-slate-400">
                   提示：大纲将作为生成测试用例的业务背景，确保用例符合真实业务场景。
                 </p>
+                <button
+                  onClick={() => {
+                    setShowOutline(false);
+                    setGenerationMode('matrix');
+                    setSourceType('outline');
+                    processFile('matrix');
+                  }}
+                  className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 transition-all"
+                >
+                  生成测试用例
+                </button>
                 <button
                   onClick={() => setShowOutline(false)}
                   className="px-6 py-2 bg-slate-900 text-white text-sm font-bold rounded-xl hover:bg-slate-800 transition-all"
@@ -594,15 +581,6 @@ export default function App() {
               >
                 <Plus className="w-5 h-5" />
               </button>
-              {currentProject && (
-                <button
-                  onClick={() => setShowOutline(true)}
-                  className="px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-all flex items-center gap-1.5"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  项目大纲
-                </button>
-              )}
             </div>
 
             <nav className="hidden md:flex items-center gap-1 ml-4 self-stretch">
@@ -742,486 +720,439 @@ export default function App() {
             )}
           </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="flex flex-col gap-8">
           
-          {/* Left Column: Upload & Controls */}
-          <div className="lg:col-span-4 space-y-6">
+          {/* Top Section: Upload & Controls */}
+          <div className="w-full space-y-6">
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-              <div className="mb-6">
-                <button 
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors mb-2"
-                >
-                  <Key className="w-4 h-4" />
-                  {showApiKey ? '隐藏 API Key 设置' : '设置自定义 API Key (可选)'}
-                  <ChevronDown className={cn("w-4 h-4 transition-transform", showApiKey && "rotate-180")} />
-                </button>
-                <AnimatePresence>
-                  {showApiKey && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden space-y-3"
-                    >
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                          API Key 选项
-                        </label>
-                        <div className="space-y-2">
-                          <button
-                            onClick={handleOpenPlatformKey}
-                            className={cn(
-                              "w-full px-4 py-2 rounded-xl text-xs font-medium border transition-all flex items-center justify-between",
-                              hasPlatformKey 
-                                ? "bg-emerald-50 border-emerald-200 text-emerald-700" 
-                                : "bg-white border-slate-200 text-slate-700 hover:border-indigo-500 hover:text-indigo-600"
-                            )}
-                          >
-                            <span className="flex items-center gap-2">
-                              <Key className="w-3 h-3" />
-                              {hasPlatformKey ? '已关联平台 API Key' : '关联平台 API Key (推荐)'}
-                            </span>
-                            {hasPlatformKey && <CheckCircle2 className="w-3 h-3" />}
-                          </button>
-
-                          <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                              <Key className="h-3 w-3 text-slate-400" />
-                            </div>
-                            <input 
-                              type="password"
-                              placeholder="或输入自定义 API Key"
-                              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
-                              value={customApiKey}
-                              onChange={(e) => setCustomApiKey(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                          选择模型
-                        </label>
-                        <div className="relative">
-                          <select 
-                            className="w-full pl-4 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
-                            value={selectedModel}
-                            onChange={(e) => setSelectedModel(e.target.value)}
-                          >
-                            <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (最强能力)</option>
-                            <option value="gemini-3-flash-preview">Gemini 3 Flash (极速响应)</option>
-                            <option value="gemini-2.5-flash">Gemini 2.5 Flash (稳定版本)</option>
-                          </select>
-                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                        </div>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        如果不填写 Key，将使用系统默认 Key。您的设置仅在本地运行，不会被存储。
-                      </p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-
-              {generationMode !== 'outline' && (
-                <div className="mb-6 pb-6 border-b border-slate-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <div className={cn(
-                        "p-1.5 rounded-lg",
-                        isIncremental ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-500"
-                      )}>
-                        <History className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-900">增量更新模式</h3>
-                        <p className="text-[10px] text-slate-500">对比 V1.0 与 V1.1，仅生成变更用例</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setIsIncremental(!isIncremental)}
-                      className={cn(
-                        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
-                        isIncremental ? "bg-indigo-600" : "bg-slate-200"
-                      )}
-                    >
-                      <span
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                
+                {/* Column 1: Uploads */}
+                <div className="space-y-6">
+                  {true && (
+                    <div className="pb-6 border-b border-slate-100">
+                      <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <FileUp className="w-5 h-5 text-indigo-600" />
+                        上传需求文档
+                      </h2>
+                  
+                      <div 
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={onDrop}
                         className={cn(
-                          "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                          isIncremental ? "translate-x-6" : "translate-x-1"
+                          "border-2 border-dashed rounded-xl p-8 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-6",
+                          file ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200 hover:border-indigo-400 hover:bg-slate-50"
                         )}
-                      />
-                    </button>
-                  </div>
-
-                  <AnimatePresence>
-                    {isIncremental && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        className="overflow-hidden"
+                        onClick={() => document.getElementById('fileInput')?.click()}
                       >
-                        <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 mb-4">
-                          <p className="text-xs text-amber-700 leading-relaxed">
-                            <strong>提示：</strong> 请先上传<b>旧版本 (V1.0)</b> 或确保当前已有测试用例，然后再上传<b>新版本 (V1.1)</b>。AI 将自动分析差异。
-                          </p>
-                        </div>
+                        <input 
+                          id="fileInput"
+                          type="file" 
+                          className="hidden" 
+                          accept=".pdf,.docx,.md,.txt"
+                          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+                        />
                         
-                        <div 
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            const f = e.dataTransfer.files[0];
-                            if (f) handleFile(f, true);
-                          }}
-                          className={cn(
-                            "border-2 border-dashed rounded-xl p-4 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-2",
-                            oldFile ? "border-amber-200 bg-amber-50/30" : "border-slate-200 hover:border-amber-400 hover:bg-slate-50"
-                          )}
-                          onClick={() => document.getElementById('oldFileInput')?.click()}
-                        >
-                          <input 
-                            id="oldFileInput"
-                            type="file" 
-                            className="hidden" 
-                            accept=".pdf,.docx,.md,.txt"
-                            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0], true)}
-                          />
-                          {oldFile ? (
-                            <div className="flex items-center gap-2">
-                              <FileText className="w-4 h-4 text-amber-600" />
-                              <span className="text-xs font-medium text-slate-700 truncate max-w-[150px]">{oldFile.name}</span>
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); setOldFile(null); setOldParsedText(''); }}
-                                className="p-1 hover:bg-amber-100 rounded-full text-slate-400 hover:text-red-500 transition-colors"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="space-y-1">
-                              <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
-                                <FileUp className="w-4 h-4 text-slate-400" />
-                              </div>
-                              <p className="text-[10px] text-slate-500">点击或拖拽上传<b>旧版 PRD</b></p>
-                            </div>
-                          )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              )}
-
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <FileUp className="w-5 h-5 text-indigo-600" />
-                {isIncremental ? '上传新版需求 (V1.1)' : '上传需求文档'}
-              </h2>
-              
-              <div 
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={onDrop}
-                className={cn(
-                  "border-2 border-dashed rounded-xl p-8 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-6",
-                  file ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200 hover:border-indigo-400 hover:bg-slate-50"
-                )}
-                onClick={() => document.getElementById('fileInput')?.click()}
-              >
-                <input 
-                  id="fileInput"
-                  type="file" 
-                  className="hidden" 
-                  accept=".pdf,.docx,.md,.txt"
-                  onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-                />
-                
-                {file ? (
-                  <div className="space-y-2">
-                    <FileText className="w-10 h-10 text-indigo-600 mx-auto" />
-                    <p className="text-sm font-medium text-slate-900 truncate max-w-[200px]">{file.name}</p>
-                    <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <Upload className="w-10 h-10 text-slate-400 mx-auto" />
-                    <p className="text-sm font-medium text-slate-900">点击或拖拽上传</p>
-                    <p className="text-xs text-slate-500">支持 PDF, Word, Markdown</p>
-                  </div>
-                )}
-              </div>
-
-              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <FileUp className="w-5 h-5 text-indigo-600" />
-                上传设计图（最多4张）
-              </h2>
-              
-              <div 
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={onDesignDrop}
-                className={cn(
-                  "border-2 border-dashed rounded-xl p-6 transition-all flex flex-col items-center justify-center text-center cursor-pointer",
-                  designFiles.length > 0 ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200 hover:border-indigo-400 hover:bg-slate-50"
-                )}
-                onClick={() => designFiles.length < 4 && document.getElementById('designInput')?.click()}
-              >
-                <input 
-                  id="designInput"
-                  type="file" 
-                  className="hidden" 
-                  accept="image/png,image/jpeg,image/jpg"
-                  multiple
-                  onChange={(e) => e.target.files && handleDesignFiles(Array.from(e.target.files))}
-                />
-                
-                <div className="space-y-2">
-                  <Upload className={cn("w-8 h-8 mx-auto", designFiles.length > 0 ? "text-indigo-600" : "text-slate-400")} />
-                  <p className="text-sm font-medium text-slate-900">点击或拖拽上传</p>
-                  <p className="text-xs text-slate-500">支持 PNG, JPG (最多4张, 每张 &lt; 5MB)</p>
-                </div>
-              </div>
-
-              {designFiles.length > 0 && (
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  {designFiles.map((f, i) => (
-                    <div key={i} className="relative group bg-slate-50 border border-slate-200 rounded-lg p-2 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
-                      <span className="text-xs text-slate-600 truncate flex-1">{f.name}</span>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeDesignFile(i);
-                        }}
-                        className="text-slate-400 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {(generationMode === 'matrix' || generationMode === 'xmind') && (
-                <div className="mt-6 space-y-4">
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold text-slate-700">数据源</h3>
-                    <div className="flex flex-col gap-2">
-                      <button
-                        onClick={() => file && setSourceType('original')}
-                        disabled={!file}
-                        className={cn(
-                          "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
-                          sourceType === 'original' 
-                            ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
-                            : "border-slate-200 bg-white hover:border-indigo-300",
-                          !file && "opacity-50 cursor-not-allowed"
-                        )}
-                      >
-                        <FileText className={cn("w-4 h-4", sourceType === 'original' ? "text-indigo-600" : "text-slate-400")} />
-                        <div className="flex-1 min-w-0">
-                          <p className={cn("text-xs font-bold truncate", sourceType === 'original' ? "text-indigo-900" : "text-slate-700")}>
-                            {file?.name || '原始需求文档'}
-                          </p>
-                          <p className="text-[10px] text-slate-500">PRD 原始解析内容</p>
-                        </div>
-                        {sourceType === 'original' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
-                      </button>
-
-                      {revisedDocument && (
-                        <button
-                          onClick={() => setSourceType('revised')}
-                          className={cn(
-                            "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
-                            sourceType === 'revised' 
-                              ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
-                              : "border-slate-200 bg-white hover:border-indigo-300"
-                          )}
-                        >
-                          <div className="w-4 h-4 bg-indigo-600 rounded flex items-center justify-center shrink-0">
-                            <CheckCircle2 className="w-3 h-3 text-white" />
+                        {file ? (
+                          <div className="space-y-2">
+                            <FileText className="w-10 h-10 text-indigo-600 mx-auto" />
+                            <p className="text-sm font-medium text-slate-900 truncate max-w-[200px]">{file.name}</p>
+                            <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className={cn("text-xs font-bold truncate", sourceType === 'revised' ? "text-indigo-900" : "text-slate-700")}>
-                              修正版: {file?.name}
-                            </p>
-                            <p className="text-[10px] text-slate-500">基于评审建议优化后的文档</p>
+                        ) : (
+                          <div className="space-y-2">
+                            <Upload className="w-10 h-10 text-slate-400 mx-auto" />
+                            <p className="text-sm font-medium text-slate-900">点击或拖拽上传</p>
+                            <p className="text-xs text-slate-500">支持 PDF, Word, Markdown</p>
                           </div>
-                          {sourceType === 'revised' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold text-slate-700">测试风格</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(Object.keys(TEST_STYLES) as TestStyle[]).map((style) => {
-                        const Icon = style === 'standard' ? Activity : 
-                                     style === 'strict' ? Target : 
-                                     style === 'fast' ? Zap : Shield;
-                        return (
-                          <button
-                            key={style}
-                            onClick={() => setTestStyle(style)}
-                            className={cn(
-                              "flex flex-col items-start p-2 rounded-xl border transition-all text-left",
-                              testStyle === style 
-                                ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
-                                : "border-slate-200 bg-white hover:border-indigo-300"
-                            )}
-                          >
-                            <div className="flex items-center gap-1.5 mb-1">
-                              <Icon className={cn("w-3 h-3", testStyle === style ? "text-indigo-600" : "text-slate-400")} />
-                              <span className={cn("text-[10px] font-bold", testStyle === style ? "text-indigo-900" : "text-slate-700")}>
-                                {TEST_STYLES[style].name}
-                              </span>
-                            </div>
-                            <p className="text-[8px] text-slate-500 line-clamp-1">{TEST_STYLES[style].description}</p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold text-slate-700">视图模式</h3>
-                    <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
-                      <button
-                        onClick={() => setGenerationMode('matrix')}
-                        className={cn(
-                          "py-2 text-[10px] font-medium rounded-lg transition-all",
-                          generationMode === 'matrix' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
                         )}
-                      >
-                        Excel模式
-                      </button>
-                      <button
-                        onClick={() => setGenerationMode('xmind')}
-                        className={cn(
-                          "py-2 text-[10px] font-medium rounded-lg transition-all",
-                          generationMode === 'xmind' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                        )}
-                      >
-                        Xmind模式
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-slate-100">
-                    <button 
-                      onClick={() => setShowHistory(!showHistory)}
-                      className="flex items-center justify-between w-full text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <History className="w-4 h-4" />
-                        历史记录 ({history.length})
                       </div>
-                      <ChevronDown className={cn("w-4 h-4 transition-transform", showHistory && "rotate-180")} />
-                    </button>
+                    </div>
+                  )}
+
+                  <div>
+                    <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                      <FileUp className="w-5 h-5 text-indigo-600" />
+                      上传设计图（最多4张）
+                    </h2>
                     
+                    <div 
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={onDesignDrop}
+                      className={cn(
+                        "border-2 border-dashed rounded-xl p-6 transition-all flex flex-col items-center justify-center text-center cursor-pointer",
+                        designFiles.length > 0 ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200 hover:border-indigo-400 hover:bg-slate-50"
+                      )}
+                      onClick={() => designFiles.length < 4 && document.getElementById('designInput')?.click()}
+                    >
+                      <input 
+                        id="designInput"
+                        type="file" 
+                        className="hidden" 
+                        accept="image/png,image/jpeg,image/jpg"
+                        multiple
+                        onChange={(e) => e.target.files && handleDesignFiles(Array.from(e.target.files))}
+                      />
+                      
+                      <div className="space-y-2">
+                        <Upload className={cn("w-8 h-8 mx-auto", designFiles.length > 0 ? "text-indigo-600" : "text-slate-400")} />
+                        <p className="text-sm font-medium text-slate-900">点击或拖拽上传</p>
+                        <p className="text-xs text-slate-500">支持 PNG, JPG (最多4张, 每张 &lt; 5MB)</p>
+                      </div>
+                    </div>
+
+                    {designFiles.length > 0 && (
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        {designFiles.map((f, i) => (
+                          <div key={i} className="relative group bg-slate-50 border border-slate-200 rounded-lg p-2 flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <span className="text-xs text-slate-600 truncate flex-1">{f.name}</span>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeDesignFile(i);
+                              }}
+                              className="text-slate-400 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Column 2: Settings */}
+                <div className="space-y-6">
+                  <div>
+                    <button 
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors mb-2"
+                    >
+                      <Key className="w-4 h-4" />
+                      {showApiKey ? '隐藏 API Key 设置' : '设置自定义 API Key (可选)'}
+                      <ChevronDown className={cn("w-4 h-4 transition-transform", showApiKey && "rotate-180")} />
+                    </button>
                     <AnimatePresence>
-                      {showHistory && (
+                      {showApiKey && (
                         <motion.div
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: 'auto', opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
-                          className="overflow-hidden mt-3 space-y-2"
+                          className="overflow-hidden space-y-3"
                         >
-                          {history.length === 0 ? (
-                            <p className="text-xs text-slate-400 text-center py-4">暂无历史记录</p>
-                          ) : (
-                            history.map((record) => (
-                              <div 
-                                key={record.id}
-                                className="group relative bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-xl p-3 transition-all cursor-pointer"
-                                onClick={() => loadHistoryRecord(record)}
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                              API Key 选项
+                            </label>
+                            <div className="space-y-2">
+                              <button
+                                onClick={handleOpenPlatformKey}
+                                className={cn(
+                                  "w-full px-4 py-2 rounded-xl text-xs font-medium border transition-all flex items-center justify-between",
+                                  hasPlatformKey 
+                                    ? "bg-emerald-50 border-emerald-200 text-emerald-700" 
+                                    : "bg-white border-slate-200 text-slate-700 hover:border-indigo-500 hover:text-indigo-600"
+                                )}
                               >
-                                <div className="flex items-start justify-between mb-1">
-                                  <span className={cn(
-                                    "text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase",
-                                    record.mode === 'matrix' ? "bg-blue-100 text-blue-700" :
-                                    record.mode === 'xmind' ? "bg-purple-100 text-purple-700" :
-                                    "bg-amber-100 text-amber-700"
-                                  )}>
-                                    {record.mode === 'matrix' ? '矩阵' : record.mode === 'xmind' ? '导图' : '评审'}
-                                  </span>
-                                  <span className="text-[8px] text-slate-400 flex items-center gap-1">
-                                    <Clock className="w-2 h-2" />
-                                    {new Date(record.timestamp).toLocaleString([], { hour: '2-digit', minute: '2-digit' })}
-                                  </span>
+                                <span className="flex items-center gap-2">
+                                  <Key className="w-3 h-3" />
+                                  {hasPlatformKey ? '已关联平台 API Key' : '关联平台 API Key (推荐)'}
+                                </span>
+                                {hasPlatformKey && <CheckCircle2 className="w-3 h-3" />}
+                              </button>
+
+                              <div className="relative">
+                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                  <Key className="h-3 w-3 text-slate-400" />
                                 </div>
-                                <p className="text-[10px] font-medium text-slate-700 truncate pr-4">{record.fileName}</p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <span className="text-[8px] text-slate-400 italic">风格: {TEST_STYLES[record.style].name}</span>
-                                </div>
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    deleteHistoryRecord(record.id);
-                                  }}
-                                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
+                                <input 
+                                  type="password"
+                                  placeholder="或输入自定义 API Key"
+                                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                                  value={customApiKey}
+                                  onChange={(e) => setCustomApiKey(e.target.value)}
+                                />
                               </div>
-                            ))
-                          )}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                              选择模型
+                            </label>
+                            <div className="relative">
+                              <select 
+                                className="w-full pl-4 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
+                                value={selectedModel}
+                                onChange={(e) => setSelectedModel(e.target.value)}
+                              >
+                                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (最强能力)</option>
+                                <option value="gemini-3-flash-preview">Gemini 3 Flash (极速响应)</option>
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash (稳定版本)</option>
+                              </select>
+                              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            如果不填写 Key，将使用系统默认 Key。您的设置仅在本地运行，不会被存储。
+                          </p>
                         </motion.div>
                       )}
                     </AnimatePresence>
                   </div>
-                </div>
-              )}
 
-              {file && (
-                <button
-                  onClick={() => processFile()}
-                  disabled={isParsing || isGenerating}
-                  className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
-                >
-                  {isParsing || isGenerating ? (
+                  {(generationMode === 'matrix' || generationMode === 'xmind') && (
                     <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      {isParsing ? '正在解析文档...' : 'AI 正在分析生成...'}
-                    </>
-                  ) : (
-                    <>
-                      {generationMode === 'outline' ? '更新项目大纲' : (testCases.length > 0 || xmindContent || analysisReport || revisedDocument) ? '重新生成' : '开始分析生成'}
+                      <div className="space-y-2">
+                        <h3 className="text-sm font-semibold text-slate-700">测试风格</h3>
+                        <div className="grid grid-cols-2 gap-2">
+                          {(Object.keys(TEST_STYLES) as TestStyle[]).map((style) => {
+                            const Icon = style === 'standard' ? Activity : 
+                                         style === 'strict' ? Target : 
+                                         style === 'fast' ? Zap : Shield;
+                            return (
+                              <button
+                                key={style}
+                                onClick={() => setTestStyle(style)}
+                                className={cn(
+                                  "flex flex-col items-start p-2 rounded-xl border transition-all text-left",
+                                  testStyle === style 
+                                    ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                                    : "border-slate-200 bg-white hover:border-indigo-300"
+                                )}
+                              >
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <Icon className={cn("w-3 h-3", testStyle === style ? "text-indigo-600" : "text-slate-400")} />
+                                  <span className={cn("text-[10px] font-bold", testStyle === style ? "text-indigo-900" : "text-slate-700")}>
+                                    {TEST_STYLES[style].name}
+                                  </span>
+                                </div>
+                                <p className="text-[8px] text-slate-500 line-clamp-1">{TEST_STYLES[style].description}</p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="text-sm font-semibold text-slate-700">视图模式</h3>
+                        <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                          <button
+                            onClick={() => setGenerationMode('matrix')}
+                            className={cn(
+                              "py-2 text-[10px] font-medium rounded-lg transition-all",
+                              generationMode === 'matrix' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                            )}
+                          >
+                            Excel模式
+                          </button>
+                          <button
+                            onClick={() => setGenerationMode('xmind')}
+                            className={cn(
+                              "py-2 text-[10px] font-medium rounded-lg transition-all",
+                              generationMode === 'xmind' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                            )}
+                          >
+                            Xmind模式
+                          </button>
+                        </div>
+                      </div>
                     </>
                   )}
-                </button>
-              )}
-
-              {testCases.length > 0 || xmindContent || analysisReport || revisedDocument ? (
-                <button
-                  onClick={() => {
-                    setFile(null);
-                    setDesignFiles([]);
-                    setTestCases([]);
-                    setXmindContent('');
-                    setAnalysisReport('');
-                    setRevisedDocument('');
-                    setSourceType(null);
-                  }}
-                  className="w-full mt-4 text-slate-500 hover:text-red-600 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  清空并重新开始
-                </button>
-              ) : null}
-
-              {error && (
-                <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700">{error}</p>
                 </div>
-              )}
+
+                {/* Column 3: Actions */}
+                <div className="space-y-6 flex flex-col">
+                  {(generationMode === 'matrix' || generationMode === 'xmind') && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-semibold text-slate-700">数据源</h3>
+                      <div className="flex flex-col gap-2">
+                        <button
+                          onClick={() => file && setSourceType('original')}
+                          disabled={!file}
+                          className={cn(
+                            "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
+                            sourceType === 'original' 
+                              ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                              : "border-slate-200 bg-white hover:border-indigo-300",
+                            !file && "opacity-50 cursor-not-allowed"
+                          )}
+                        >
+                          <FileText className={cn("w-4 h-4", sourceType === 'original' ? "text-indigo-600" : "text-slate-400")} />
+                          <div className="flex-1 min-w-0">
+                            <p className={cn("text-xs font-bold truncate", sourceType === 'original' ? "text-indigo-900" : "text-slate-700")}>
+                              {file?.name || '原始需求文档'}
+                            </p>
+                            <p className="text-[10px] text-slate-500">PRD 原始解析内容</p>
+                          </div>
+                          {sourceType === 'original' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
+                        </button>
+
+                        {revisedDocument && (
+                          <button
+                            onClick={() => setSourceType('revised')}
+                            className={cn(
+                              "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
+                              sourceType === 'revised' 
+                                ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                                : "border-slate-200 bg-white hover:border-indigo-300"
+                            )}
+                          >
+                            <div className="w-4 h-4 bg-indigo-600 rounded flex items-center justify-center shrink-0">
+                              <CheckCircle2 className="w-3 h-3 text-white" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={cn("text-xs font-bold truncate", sourceType === 'revised' ? "text-indigo-900" : "text-slate-700")}>
+                                修正版: {file?.name}
+                              </p>
+                              <p className="text-[10px] text-slate-500">基于评审建议优化后的文档</p>
+                            </div>
+                            {sourceType === 'revised' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
+                          </button>
+                        )}
+                        {currentProject?.outline && (
+                          <button
+                            onClick={() => setSourceType('outline')}
+                            className={cn(
+                              "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
+                              sourceType === 'outline' 
+                                ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                                : "border-slate-200 bg-white hover:border-indigo-300"
+                            )}
+                          >
+                            <List className="w-4 h-4 text-slate-400" />
+                            <div className="flex-1 min-w-0">
+                              <p className={cn("text-xs font-bold truncate", sourceType === 'outline' ? "text-indigo-900" : "text-slate-700")}>
+                                项目大纲
+                              </p>
+                              <p className="text-[10px] text-slate-500">基于项目总体需求大纲</p>
+                            </div>
+                            {sourceType === 'outline' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {(generationMode === 'matrix' || generationMode === 'xmind') && (
+                    <div className="pt-4 border-t border-slate-100">
+                      <button 
+                        onClick={() => setShowHistory(!showHistory)}
+                        className="flex items-center justify-between w-full text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <History className="w-4 h-4" />
+                          历史记录 ({history.length})
+                        </div>
+                        <ChevronDown className={cn("w-4 h-4 transition-transform", showHistory && "rotate-180")} />
+                      </button>
+                      
+                      <AnimatePresence>
+                        {showHistory && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="overflow-hidden mt-3 space-y-2"
+                          >
+                            {history.length === 0 ? (
+                              <p className="text-xs text-slate-400 text-center py-4">暂无历史记录</p>
+                            ) : (
+                              history.map((record) => (
+                                <div 
+                                  key={record.id}
+                                  className="group relative bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-xl p-3 transition-all cursor-pointer"
+                                  onClick={() => loadHistoryRecord(record)}
+                                >
+                                  <div className="flex items-start justify-between mb-1">
+                                    <span className={cn(
+                                      "text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase",
+                                      record.mode === 'matrix' ? "bg-blue-100 text-blue-700" :
+                                      record.mode === 'xmind' ? "bg-purple-100 text-purple-700" :
+                                      "bg-amber-100 text-amber-700"
+                                    )}>
+                                      {record.mode === 'matrix' ? '矩阵' : record.mode === 'xmind' ? '导图' : '评审'}
+                                    </span>
+                                    <span className="text-[8px] text-slate-400 flex items-center gap-1">
+                                      <Clock className="w-2 h-2" />
+                                      {new Date(record.timestamp).toLocaleString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] font-medium text-slate-700 truncate pr-4">{record.fileName}</p>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <span className="text-[8px] text-slate-400 italic">风格: {TEST_STYLES[record.style].name}</span>
+                                  </div>
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      deleteHistoryRecord(record.id);
+                                    }}
+                                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
+
+                  <div className="mt-auto pt-6">
+                    {(file || sourceType === 'outline' || sourceType === 'revised') && (
+                      <button
+                        onClick={() => processFile()}
+                        disabled={isParsing || isGenerating}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
+                      >
+                        {isParsing || isGenerating ? (
+                          <>
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                            {isParsing ? '正在解析文档...' : 'AI 正在分析生成...'}
+                          </>
+                        ) : (
+                          <>
+                            {generationMode === 'outline' ? '更新项目大纲' : (testCases.length > 0 || xmindContent || analysisReport || revisedDocument) ? '重新生成' : '开始分析生成'}
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {(testCases.length > 0 || xmindContent || analysisReport || revisedDocument) && (
+                      <button
+                        onClick={() => {
+                          setFile(null);
+                          setDesignFiles([]);
+                          setTestCases([]);
+                          setXmindContent('');
+                          setAnalysisReport('');
+                          setRevisedDocument('');
+                          setSourceType(null);
+                        }}
+                        className="w-full mt-4 text-slate-500 hover:text-red-600 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        清空并重新开始
+                      </button>
+                    )}
+
+                    {error && (
+                      <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3">
+                        <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                        <p className="text-sm text-red-700">{error}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Right Column: Results */}
-          <div className="lg:col-span-8 space-y-6">
+          {/* Bottom Section: Results */}
+          <div className="w-full space-y-6">
             {(isParsing || isGenerating) ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 bg-white rounded-2xl border border-slate-200">
                 <div className="relative w-24 h-24 mb-6">
@@ -1255,6 +1186,16 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <button
                         onClick={() => {
+                          setGenerationMode('matrix');
+                          setSourceType('outline');
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 transition-all"
+                      >
+                        <Zap className="w-4 h-4" />
+                        生成测试用例
+                      </button>
+                      <button
+                        onClick={() => {
                           if (currentProject?.outline) {
                             const blob = new Blob([currentProject.outline], { type: 'text/markdown;charset=utf-8;' });
                             const link = document.createElement("a");
@@ -1273,11 +1214,11 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex-1 flex gap-8 overflow-hidden">
+                  <div className="flex-1 flex gap-8">
                     {currentProject?.outline ? (
                       <>
                         {/* TOC Sidebar */}
-                        <div className="w-64 shrink-0 border-r border-slate-100 pr-6 overflow-y-auto hidden md:block">
+                        <div className="w-64 shrink-0 border-r border-slate-100 pr-6 overflow-y-auto hidden md:block sticky top-6 self-start max-h-[calc(100vh-100px)]">
                           <div className="flex items-center gap-2 mb-4 text-slate-900 font-bold">
                             <List className="w-4 h-4" />
                             <span>目录</span>
@@ -1302,7 +1243,7 @@ export default function App() {
                         {/* Content Area */}
                         <div className="flex-1 overflow-y-auto pr-2">
                           <div className="prose prose-slate max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900 prose-pre:bg-slate-900 prose-pre:text-slate-100">
-                            <Markdown rehypePlugins={[rehypeSlug]}>{currentProject.outline}</Markdown>
+                            <Markdown rehypePlugins={[rehypeSlug]} remarkPlugins={[remarkGfm]}>{currentProject.outline}</Markdown>
                           </div>
                         </div>
                       </>
@@ -1572,7 +1513,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm min-h-[500px] prose prose-slate max-w-none">
-                  <Markdown>{analysisTab === 'report' ? analysisReport : revisedDocument}</Markdown>
+                  <Markdown remarkPlugins={[remarkGfm]}>{analysisTab === 'report' ? analysisReport : revisedDocument}</Markdown>
                 </div>
               </div>
             )}
