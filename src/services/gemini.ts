@@ -187,7 +187,7 @@ export async function generateTestCases(
         ${requirementText}
       `;
 
-      const moduleParts: any[] = [{ text: modulePrompt }];
+      const moduleParts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [{ text: modulePrompt }];
       if (images && images.length > 0) {
         images.forEach(img => {
           moduleParts.push({
@@ -286,7 +286,7 @@ export async function generateTestCases(
     请严格按照以上要求，生成一份完整、专业、可直接用于生产环境的测试用例矩阵。
   `;
 
-  const parts: any[] = [{ text: prompt }];
+  const parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [{ text: prompt }];
   if (images && images.length > 0) {
     images.forEach(img => {
       parts.push({
@@ -334,9 +334,9 @@ export async function generateTestCases(
     }
 
     return JSON.parse(response.text);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Gemini API Error (Test Cases):", error);
-    const errorMsg = error.message || "";
+    const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes("Safety")) {
       throw new Error("内容被安全过滤器拦截，请检查您的文档或图片内容。");
     }
@@ -470,7 +470,7 @@ export async function generateXMindContent(
     ${images && images.length > 0 ? "此外，我还提供了一些设计图作为参考，请结合设计图中的 UI 细节来完善测试点。" : ""}
   `;
 
-  const parts: any[] = [{ text: prompt }];
+  const parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [{ text: prompt }];
   if (images && images.length > 0) {
     images.forEach(img => {
       parts.push({
@@ -489,9 +489,9 @@ export async function generateXMindContent(
     });
 
     return response.text || "";
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Gemini API Error (XMind):", error);
-    const errorMsg = error.message || "";
+    const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes("Safety")) {
       throw new Error("内容被安全过滤器拦截，请检查您的文档或图片内容。");
     }
@@ -555,7 +555,7 @@ export async function analyzeRequirements(
     ${images && images.length > 0 ? "此外，我还提供了一些设计图作为参考，请结合设计图进行评审。" : ""}
   `;
 
-  const parts: any[] = [{ text: prompt }];
+  const parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [{ text: prompt }];
   if (images && images.length > 0) {
     images.forEach(img => {
       parts.push({
@@ -589,9 +589,9 @@ export async function analyzeRequirements(
     }
 
     return JSON.parse(response.text);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Gemini API Error (Analysis):", error);
-    const errorMsg = error.message || "";
+    const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes("Safety")) {
       throw new Error("内容被安全过滤器拦截，请检查您的文档或图片内容。");
     }
@@ -680,7 +680,7 @@ export async function generateIncrementalTestCases(
     }
   `;
 
-  const parts: any[] = [{ text: prompt }];
+  const parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [{ text: prompt }];
   if (images && images.length > 0) {
     images.forEach(img => {
       parts.push({
@@ -750,8 +750,8 @@ export async function generateIncrementalTestCases(
     });
 
     return JSON.parse(response.text || '{"newCases":[],"updatedCases":[],"deletedIds":[]}');
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Gemini API Error (Incremental):", error);
-    throw new Error(`增量更新失败: ${error.message || "未知错误"}`);
+    throw new Error(`增量更新失败: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

@@ -25,7 +25,6 @@ import {
   generateTestCases, 
   generateXMindContent, 
   analyzeRequirements,
-  generateIncrementalTestCases,
   TEST_STYLES,
   type TestCase, 
   type ImageContent,
@@ -36,7 +35,7 @@ import { exportToExcel, exportToXMind } from './utils/exportUtils';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
-import { Shield, Zap, Target, Activity, Plus, FolderOpen, Settings, List } from 'lucide-react';
+import { Shield, Zap, Target, Activity, Plus, FolderOpen, List } from 'lucide-react';
 import { projectService, type Project } from './services/projectService';
 import { updateProjectOutline } from './services/gemini';
 
@@ -78,8 +77,6 @@ export default function App() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [hasPlatformKey, setHasPlatformKey] = useState(false);
-  const [oldFile, setOldFile] = useState<File | null>(null);
-  const [oldParsedText, setOldParsedText] = useState<string>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [showProjectModal, setShowProjectModal] = useState(false);
@@ -153,9 +150,10 @@ export default function App() {
     e.preventDefault();
     const droppedFiles = Array.from(e.dataTransfer.files);
     handleDesignFiles(droppedFiles);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [designFiles]);
 
-  const handleFile = (selectedFile: File, isOld: boolean = false) => {
+  const handleFile = (selectedFile: File) => {
     const validTypes = ['.pdf', '.docx', '.md', '.txt'];
     const extension = selectedFile.name.substring(selectedFile.name.lastIndexOf('.')).toLowerCase();
     
@@ -169,18 +167,13 @@ export default function App() {
       return;
     }
 
-    if (isOld) {
-      setOldFile(selectedFile);
-      setOldParsedText('');
-    } else {
-      setFile(selectedFile);
-      setSourceType('original');
-      setParsedText('');
-      setTestCases([]);
-      setXmindContent('');
-      setAnalysisReport('');
-      setRevisedDocument('');
-    }
+    setFile(selectedFile);
+    setSourceType('original');
+    setParsedText('');
+    setTestCases([]);
+    setXmindContent('');
+    setAnalysisReport('');
+    setRevisedDocument('');
     setError(null);
   };
 
@@ -299,8 +292,6 @@ export default function App() {
         return;
       }
 
-      let oldText = '';
-      
       setIsGenerating(true);
       setGenerationProgress('正在准备生成...');
 
@@ -503,7 +494,7 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
                 {currentProject.outline ? (
-                  <div className="prose prose-slate prose-sm max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900">
+                  <div className="markdown-body prose-sm">
                     <Markdown remarkPlugins={[remarkGfm]}>{currentProject.outline}</Markdown>
                   </div>
                 ) : (
@@ -1242,7 +1233,7 @@ export default function App() {
 
                         {/* Content Area */}
                         <div className="flex-1 overflow-y-auto pr-2">
-                          <div className="prose prose-slate max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900 prose-pre:bg-slate-900 prose-pre:text-slate-100">
+                          <div className="markdown-body">
                             <Markdown rehypePlugins={[rehypeSlug]} remarkPlugins={[remarkGfm]}>{currentProject.outline}</Markdown>
                           </div>
                         </div>
@@ -1512,7 +1503,7 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm min-h-[500px] prose prose-slate max-w-none">
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm min-h-[500px] markdown-body">
                   <Markdown remarkPlugins={[remarkGfm]}>{analysisTab === 'report' ? analysisReport : revisedDocument}</Markdown>
                 </div>
               </div>

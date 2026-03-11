@@ -1,1 +1,26 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@layer components {
+  .markdown-body {
+    @apply prose prose-slate max-w-none w-full;
+    @apply prose-headings:font-bold prose-headings:text-slate-900 prose-headings:tracking-tight;
+    @apply prose-h1:text-3xl prose-h1:mb-6 prose-h1:pb-4 prose-h1:border-b prose-h1:border-slate-200;
+    @apply prose-h2:text-2xl prose-h2:mt-10 prose-h2:mb-4;
+    @apply prose-h3:text-xl prose-h3:mt-8 prose-h3:mb-3;
+    @apply prose-p:text-slate-600 prose-p:leading-relaxed;
+    @apply prose-a:text-indigo-600 prose-a:font-medium prose-a:no-underline hover:prose-a:underline;
+    @apply prose-strong:text-slate-900 prose-strong:font-semibold;
+    @apply prose-ul:list-disc prose-ul:pl-5;
+    @apply prose-ol:list-decimal prose-ol:pl-5;
+    @apply prose-li:my-1 prose-li:text-slate-600 prose-li:marker:text-indigo-400;
+    @apply prose-blockquote:border-l-4 prose-blockquote:border-indigo-500 prose-blockquote:bg-indigo-50/50 prose-blockquote:py-2 prose-blockquote:px-5 prose-blockquote:not-italic prose-blockquote:text-slate-700 prose-blockquote:rounded-r-lg;
+    @apply prose-code:text-indigo-600 prose-code:bg-indigo-50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none prose-code:font-mono prose-code:text-sm;
+    @apply prose-pre:bg-slate-900 prose-pre:text-slate-50 prose-pre:rounded-xl prose-pre:shadow-sm;
+    @apply prose-table:w-full prose-table:border-collapse prose-table:text-sm;
+    @apply prose-th:bg-slate-50 prose-th:text-slate-700 prose-th:font-semibold prose-th:p-3 prose-th:border prose-th:border-slate-200 prose-th:text-left;
+    @apply prose-td:p-3 prose-td:border prose-td:border-slate-200 prose-td:text-slate-600;
+    @apply prose-img:rounded-xl prose-img:shadow-md prose-img:mx-auto;
+    @apply prose-hr:border-slate-200 prose-hr:my-8;
+  }
+}

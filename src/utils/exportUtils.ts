@@ -66,7 +66,13 @@ const parseMarkdownToXMind = (markdown: string) => {
     startIndex = 1;
   }
 
-  const rootTopic: any = {
+  interface XMindNode {
+    id: string;
+    title: string;
+    children?: { attached: XMindNode[] };
+  }
+
+  const rootTopic: XMindNode = {
     id: `topic-${Math.random().toString(36).substr(2, 9)}`,
     title: rootTitle,
     children: { attached: [] }
@@ -74,7 +80,7 @@ const parseMarkdownToXMind = (markdown: string) => {
 
   // Stack to keep track of parent nodes at each level
   // Level 0 is the rootTopic
-  const stack: { level: number; node: any }[] = [{ level: 0, node: rootTopic }];
+  const stack: { level: number; node: XMindNode }[] = [{ level: 0, node: rootTopic }];
 
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -116,7 +122,7 @@ const parseMarkdownToXMind = (markdown: string) => {
   }
 
   // Clean up empty children
-  const clean = (node: any) => {
+  const clean = (node: XMindNode) => {
     if (node.children && node.children.attached.length === 0) {
       delete node.children;
     } else if (node.children) {
